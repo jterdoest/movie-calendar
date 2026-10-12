@@ -12,6 +12,7 @@ import build_calendar as bc  # noqa: E402
 # Tests pin their own filter settings so tuning config.toml doesn't break them.
 CFG = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
 CFG["releases"].update(release_types=[3], days_back=60, days_ahead=365, min_popularity=5.0,
+                       near_days=365, future_min_popularity=5.0,  # single tier unless a test opts in
                        exclude_rereleases=False, exclude_note_keywords=["fathom", "early access", "event"])
 CFG["events"]["alert"] = ""
 CFG["streaming"]["enabled"] = False  # streaming tests switch it on
@@ -230,7 +231,7 @@ class BuildTests(unittest.TestCase):
         api, _, ev = self.build(cfg)
         self.assertEqual(sum(1 for path, _ in api.calls if path == "/discover/movie"), 1)
         self.assertNotIn("/movie/103", [path for path, _ in api.calls])
-        self.assertIn("Just below min_popularity (15.0)", self.report)
+        self.assertIn("Just below the popularity cutoff", self.report)
         self.assertIn("## 🍿 3 movies on the calendar", self.report)
 
     def streaming_build(self, **overrides):
@@ -268,7 +269,7 @@ class BuildTests(unittest.TestCase):
         self.streaming_build()
         self.assertIn("| 2026-11-20 | Heist Club | Netflix | 50.0 |", self.report)
         self.assertIn("| 2026-11-06 | Starfall", self.report)
-        self.assertIn("Low Stream (2.0)", self.report)
+        self.assertIn("Low Stream (2.0 of 5)", self.report)
         api, _, ev = self.build()
         self.assertFalse(any(p.get("with_release_type") == "4" for _, p in api.calls))
         self.assertNotIn("tmdb-201@movie-calendar", ev)
@@ -290,6 +291,41 @@ class BuildTests(unittest.TestCase):
         _, _, ev = self.build(cfg)
         self.assertIn("tmdb-103@movie-calendar", ev)  # Tamil-language theatrical release kept
 
+    def test_sliding_popularity_cutoff(self):
+        far_movies = {
+            301: {"id": 301, "title": "Big Next Summer", "release_date": "2027-05-07", "original_language": "en",
+                  "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2027-05-07", 3)]}]}},
+            303: {"id": 303, "title": "Sneaky Near Title", "release_date": "2026-11-01", "original_language": "en",
+                  "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-11-01", 3), rd("2027-02-01", 3)]}]}},
+        }
+
+        class TieredAPI(FakeAPI):
+            def get(self, path, **params):
+                self.calls.append((path, params))
+                if path == "/discover/movie":
+                    if params["release_date.gte"] == "2026-11-24":  # far window
+                        return {"total_pages": 1, "results": [{"id": 301, "popularity": 8.0}, {"id": 303, "popularity": 6.0},
+                                                              {"id": 302, "title": "Tiny Far Film", "popularity": 2.0}]}
+                    return {"total_pages": 1, "results": [{"id": 101, "popularity": 90.0}, {"id": 106, "popularity": 9.0}]}
+                movie_id = int(path.rsplit("/", 1)[1])
+                return copy.deepcopy(far_movies.get(movie_id) or MOVIES[movie_id])
+
+        cfg = copy.deepcopy(CFG)
+        cfg["releases"].update(min_popularity=15.0, near_days=42, future_min_popularity=4.0)
+        api = TieredAPI()
+        _, events, report = bc.build(api, cfg, TODAY, NOW)
+        ev = {e["uid"]: e for e in events}
+        windows = sorted({(p["release_date.gte"], p["release_date.lte"]) for path, p in api.calls if path == "/discover/movie"})
+        self.assertEqual(windows, [("2026-08-13", "2026-11-23"), ("2026-11-24", "2027-10-12")])
+        self.assertIn("tmdb-301@movie-calendar", ev)        # big future release, low current buzz → kept
+        self.assertIn("tmdb-101@movie-calendar", ev)        # near-term, popular → kept
+        self.assertNotIn("tmdb-106@movie-calendar", ev)     # near-term at 9 < 15 → never fetched
+        self.assertNotIn("/movie/106", [p for p, _ in api.calls])
+        self.assertNotIn("tmdb-303@movie-calendar", ev)     # found via far floor but lands near-term
+        self.assertIn("Sneaky Near Title | 6.0 | popularity below 15.0 for a 2026-11-01 release", report)
+        self.assertIn("Tiny Far Film (2.0 of 4)", report)
+        self.assertIn("2026-11-24 → 2027-10-12: popularity ≥ 4", report)
+
     def test_shipped_config_is_complete(self):
         shipped = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
         self.assertTrue(shipped["releases"]["exclude_rereleases"])
@@ -299,6 +335,7 @@ class BuildTests(unittest.TestCase):
         self.assertIn("Netflix", shipped["streaming"]["services"])
         self.assertEqual(shipped["streaming"]["min_runtime"], 60)
         self.assertEqual(shipped["streaming"]["languages"], ["en"])
+        self.assertEqual((shipped["releases"]["near_days"], shipped["releases"]["future_min_popularity"]), (42, 4.0))
 
     def test_runtime_format(self):
         self.assertEqual(bc.format_runtime(45), "45m")

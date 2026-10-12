@@ -19,6 +19,10 @@ days_ahead = 365     # look this far into the future
 # score well above 15. Lower it to see more, 0 includes everything. Each build's
 # Actions run page lists what was kept, filtered, and just missed the cutoff.
 min_popularity = 15.0
+# Popularity tracks current buzz, so movies months away score low even when they're big.
+# Releases more than near_days out only need future_min_popularity.
+near_days = 42
+future_min_popularity = 4.0
 # Leave out re-releases and anniversary runs of older films.
 exclude_rereleases = true
 # Ignore release entries whose TMDB note contains any of these (case-insensitive).

@@ -27,7 +27,8 @@ Edit `config.toml` and push. The next build uses your changes.
 |---|---|
 | `event_prefix` | Text in front of every title (default `🍿 `) |
 | `release_types` | `[3]` = wide theatrical only. `[2, 3]` adds limited releases, which are tagged "(Limited)". |
-| `min_popularity` | Raise it to show fewer, bigger titles. Use `0` for everything. |
+| `min_popularity` | Cutoff for releases in the next `near_days` (default 42). Raise it to show fewer, bigger titles. Use `0` for everything. |
+| `future_min_popularity` | Lower cutoff for releases further out (default 4). Distant movies have little buzz on TMDB yet, even big ones. |
 | `exclude_rereleases` | `true` leaves out re-releases and anniversary runs |
 | `exclude_note_keywords` | Skips release entries whose TMDB note mentions things like "Fathom" or "early access" |
 | `days_back` / `days_ahead` | How far back and ahead the calendar covers |

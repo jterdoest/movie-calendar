@@ -68,10 +68,11 @@ class TMDB:
         raise RuntimeError(f"TMDB request kept failing: {path}")
 
 
-def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date, types: list[int]) -> tuple[dict[int, float], list[dict]]:
+def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date, types: list[int],
+                 floor: float) -> tuple[dict[int, float], list[dict]]:
     """Movies with a regional release of the given types in [start, end], most popular first.
 
-    Returns ({id: popularity} for movies above min_popularity, [the first few
+    Returns ({id: popularity} for movies at or above `floor`, [the first few
     movies just below it] for the build report).
     """
     rel = cfg["releases"]
@@ -93,12 +94,12 @@ def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date, types: list
         results = data.get("results", [])
         for m in results:
             pop = m.get("popularity") or 0
-            if pop >= rel["min_popularity"]:
+            if pop >= floor:
                 ids.setdefault(m["id"], pop)
             elif len(below) < 15 and m["id"] not in ids:
-                below.append({"title": m.get("title", "?"), "popularity": pop})
+                below.append({"title": m.get("title", "?"), "popularity": pop, "floor": floor})
         # Sorted by popularity: once a page dips below the floor, later pages will too.
-        if not results or (results[-1].get("popularity") or 0) < rel["min_popularity"]:
+        if not results or (results[-1].get("popularity") or 0) < floor:
             break
         page += 1
     return ids, below
@@ -354,12 +355,12 @@ def _md(text: str) -> str:
     return text.replace("|", "\\|")
 
 
-def render_report(kept: list[dict], dropped: list[dict], below: list[dict], rel: dict, start: dt.date, end: dt.date) -> str:
+def render_report(kept: list[dict], dropped: list[dict], below: list[dict], rel: dict, tiers: list) -> str:
     """Markdown summary shown on the GitHub Actions run page, for tuning config.toml."""
+    floors = " · ".join(f"{a} → {b}: popularity ≥ {f:g}" for a, b, f in tiers)
     out = [
         f"## 🍿 {len(kept)} movies on the calendar",
-        f"{rel['region']} releases {start} → {end} · min_popularity {rel['min_popularity']} · "
-        f"exclude_rereleases {str(rel.get('exclude_rereleases', False)).lower()}",
+        f"{rel['region']} releases · {floors} · exclude_rereleases {str(rel.get('exclude_rereleases', False)).lower()}",
         "",
         "| Date | Title | Where | Popularity |",
         "|---|---|---|---:|",
@@ -369,23 +370,44 @@ def render_report(kept: list[dict], dropped: list[dict], below: list[dict], rel:
         out += ["", f"### Filtered out ({len(dropped)})", "", "| Title | Popularity | Reason |", "|---|---:|---|"]
         out += [f"| {_md(d['title'])} | {d['popularity']:.1f} | {_md(d['reason'])} |" for d in sorted(dropped, key=lambda d: -d["popularity"])]
     if below:
-        out += ["", f"### Just below min_popularity ({rel['min_popularity']})", "",
-                ", ".join(f"{b['title']} ({b['popularity']:.1f})" for b in below)]
+        out += ["", "### Just below the popularity cutoff", "",
+                ", ".join(f"{b['title']} ({b['popularity']:.1f} of {b['floor']:g})" for b in below)]
     return "\n".join(out) + "\n"
+
+
+def popularity_tiers(rel: dict, today: dt.date, start: dt.date, end: dt.date) -> list[tuple[dt.date, dt.date, float]]:
+    """(from, to, floor) windows: min_popularity for releases up to near_days out, then
+    future_min_popularity further out — TMDB popularity tracks current buzz, so movies
+    months away score low even when they're big."""
+    near_end = min(end, today + dt.timedelta(days=rel.get("near_days", rel["days_ahead"])))
+    tiers = [(start, near_end, rel["min_popularity"])]
+    if near_end < end:
+        tiers.append((near_end + dt.timedelta(days=1), end, rel.get("future_min_popularity", rel["min_popularity"])))
+    return tiers
+
+
+def floor_for(tiers: list[tuple[dt.date, dt.date, float]], date: dt.date) -> float:
+    return next((f for a, b, f in tiers if a <= date <= b), tiers[0][2])
 
 
 def build(api: TMDB, cfg: dict, today: dt.date, now: dt.datetime) -> tuple[str, list[dict], str]:
     rel = cfg["releases"]
     start = today - dt.timedelta(days=rel["days_back"])
     end = today + dt.timedelta(days=rel["days_ahead"])
-    ids, below = discover_ids(api, cfg, start, end, rel["release_types"])
+    tiers = popularity_tiers(rel, today, start, end)
     streaming_on = cfg.get("streaming", {}).get("enabled", False)
-    if streaming_on:
-        s_ids, s_below = discover_ids(api, cfg, start, end, [RELEASE_TYPE_DIGITAL])
-        for k, v in s_ids.items():
-            ids.setdefault(k, v)
-        seen = {b["title"] for b in below}
-        below = sorted(below + [b for b in s_below if b["title"] not in seen], key=lambda b: -b["popularity"])[:15]
+    type_sets = [rel["release_types"]] + ([[RELEASE_TYPE_DIGITAL]] if streaming_on else [])
+    ids: dict[int, float] = {}
+    below: list[dict] = []
+    for a, b, floor in tiers:
+        for types in type_sets:
+            t_ids, t_below = discover_ids(api, cfg, a, b, types, floor)
+            for k, v in t_ids.items():
+                ids.setdefault(k, v)
+            below += t_below
+    seen: set[str] = set()
+    below = [x for x in sorted(below, key=lambda x: -x["popularity"] / max(x["floor"], 0.1))
+             if x["title"] not in seen and not seen.add(x["title"])][:20]
     print(f"Discovered {len(ids)} movies with {rel['region']} releases {start} → {end}", file=sys.stderr)
 
     events, kept, dropped = [], [], []
@@ -400,6 +422,9 @@ def build(api: TMDB, cfg: dict, today: dt.date, now: dt.datetime) -> tuple[str, 
         if not release and streaming_on:
             release, s_reason = pick_streaming(movie, cfg, start, end)
             reason = reason if s_reason.endswith("had a wide theatrical release") else f"{reason}; {s_reason}"
+        if release and popularity < floor_for(tiers, release["date"]):
+            # Found via the low future floor, but it actually lands in the near-term window.
+            reason, release = f"popularity below {floor_for(tiers, release['date'])} for a {release['date']} release", None
         if release:
             events.append(build_event(movie, release, cfg))
             kept.append({"title": title, "date": release["date"], "popularity": popularity, "service": release.get("service") or "Theaters"})
@@ -408,7 +433,7 @@ def build(api: TMDB, cfg: dict, today: dt.date, now: dt.datetime) -> tuple[str, 
         if i % 40 == 0:
             time.sleep(1)  # stay well under TMDB's rate limit
     print(f"Wrote {len(events)} events, filtered out {len(dropped)}", file=sys.stderr)
-    report = render_report(kept, dropped, below, rel, start, end)
+    report = render_report(kept, dropped, below, rel, tiers)
     return render_ics(events, cfg, now), events, report
 
 
