@@ -28,10 +28,14 @@ Edit `config.toml` and push. The next build uses your changes.
 | `event_prefix` | Text in front of every title (default `🍿 `) |
 | `release_types` | `[3]` = wide theatrical only. `[2, 3]` adds limited releases, which are tagged "(Limited)". |
 | `min_popularity` | Raise it to show fewer, bigger titles. Use `0` for everything. |
+| `exclude_rereleases` | `true` leaves out re-releases and anniversary runs |
+| `exclude_note_keywords` | Skips release entries whose TMDB note mentions things like "Fathom" or "early access" |
 | `days_back` / `days_ahead` | How far back and ahead the calendar covers |
 | `alert` | `""` = no alert. `"PT9H"` = 9 AM on release day. `"-PT15H"` = 9 AM the day before. |
 
-Re-releases of older films are tagged "(Re-release)".
+When re-releases are included, they're tagged "(Re-release)".
+
+Each run's page under **Actions** shows what made the calendar, what was filtered out and why, and the titles that just missed the popularity cutoff. Use it to tune these settings.
 
 ## Run locally
 

@@ -15,9 +15,19 @@ region = "US"
 release_types = [3]
 days_back = 60       # keep recent releases on the calendar this long
 days_ahead = 365     # look this far into the future
-# Skip obscure titles. TMDB popularity is relative; ~5 trims most tiny releases,
-# 0 includes everything TMDB knows about.
-min_popularity = 5.0
+# Skip obscure titles. TMDB popularity is relative: big nationwide releases usually
+# score well above 15. Lower it to see more, 0 includes everything. Each build's
+# Actions run page lists what was kept, filtered, and just missed the cutoff.
+min_popularity = 15.0
+# Leave out re-releases and anniversary runs of older films.
+exclude_rereleases = true
+# Ignore release entries whose TMDB note contains any of these (case-insensitive).
+# Catches event screenings and limited runs entered as "Theatrical". A movie that
+# also has a plain wide-release entry is kept and dated by that entry.
+exclude_note_keywords = [
+  "fathom", "one night", "one-night", "limited", "event", "special screening",
+  "special engagement", "sneak", "early access", "fan screening", "festival",
+]
 # Hard cap on how many discover pages to read (20 movies per page).
 max_pages = 25
 

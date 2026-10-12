@@ -9,7 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import build_calendar as bc  # noqa: E402
 
+# Tests pin their own filter settings so tuning config.toml doesn't break them.
 CFG = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
+CFG["releases"].update(release_types=[3], days_back=60, days_ahead=365, min_popularity=5.0,
+                       exclude_rereleases=False, exclude_note_keywords=["fathom", "early access", "event"])
+CFG["events"]["alert"] = ""
 TODAY = dt.date(2026, 10, 12)
 NOW = dt.datetime(2026, 10, 12, 15, 0, tzinfo=dt.timezone.utc)
 
@@ -46,6 +50,17 @@ MOVIES = {
         "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-10-23", 2, "R")]}]},
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
     },
+    105: {  # Fathom event screening entered as Theatrical
+        "id": 105, "title": "Anime Night Live", "release_date": "2026-11-12", "runtime": 110, "overview": "",
+        "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-11-12", 3, "", "Fathom Events")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
+    },
+    106: {  # IMAX early-access night before the wide release
+        "id": 106, "title": "Big Blockbuster", "release_date": "2026-12-18", "runtime": 150, "overview": "",
+        "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [
+            rd("2026-12-15", 3, "PG-13", "IMAX Early Access"), rd("2026-12-18", 3, "PG-13")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
+    },
     104: {  # US theatrical outside the window
         "id": 104, "title": "Way Later", "release_date": "2028-05-01", "runtime": None, "overview": "",
         "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2028-05-01", 3)]}]},
@@ -64,10 +79,11 @@ class FakeAPI:
             if params["page"] == 1:
                 return {"total_pages": 3, "results": [
                     {"id": 101, "popularity": 90.0}, {"id": 102, "popularity": 40.0},
+                    {"id": 105, "popularity": 30.0}, {"id": 106, "popularity": 25.0},
                     {"id": 103, "popularity": 12.0}, {"id": 104, "popularity": 8.0},
                 ]}
             if params["page"] == 2:
-                return {"total_pages": 3, "results": [{"id": 105, "popularity": 4.0}, {"id": 101, "popularity": 3.0}]}
+                return {"total_pages": 3, "results": [{"id": 107, "title": "Tiny Film", "popularity": 4.0}, {"id": 101, "popularity": 3.0}]}
             raise AssertionError("should stop paging once popularity falls below the floor")
         return copy.deepcopy(MOVIES[int(path.rsplit("/", 1)[1])])
 
@@ -75,7 +91,7 @@ class FakeAPI:
 class BuildTests(unittest.TestCase):
     def build(self, cfg=CFG):
         api = FakeAPI()
-        ics, events = bc.build(api, cfg, TODAY, NOW)
+        ics, events, self.report = bc.build(api, cfg, TODAY, NOW)
         return api, ics, {e["uid"]: e for e in events}
 
     def test_discover_params_and_paging(self):
@@ -87,11 +103,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(pages[0]["release_date.gte"], "2026-08-13")
         self.assertEqual(pages[0]["release_date.lte"], "2027-10-12")
         detail_ids = [path for path, _ in api.calls if path.startswith("/movie/")]
-        self.assertNotIn("/movie/105", detail_ids)  # below min_popularity
+        self.assertNotIn("/movie/107", detail_ids)  # below min_popularity
 
     def test_event_content(self):
         _, _, ev = self.build()
-        self.assertEqual(set(ev), {"tmdb-101@movie-calendar", "tmdb-102@movie-calendar"})
+        self.assertEqual(set(ev), {"tmdb-101@movie-calendar", "tmdb-102@movie-calendar", "tmdb-106@movie-calendar"})
         e = ev["tmdb-101@movie-calendar"]
         self.assertEqual(e["date"], dt.date(2026, 11, 6))  # wide release, not the premiere
         self.assertTrue(e["summary"].startswith("🍿 Starfall"))
@@ -135,7 +151,7 @@ class BuildTests(unittest.TestCase):
             return
         cal = icalendar.Calendar.from_ical(ics)
         evs = list(cal.walk("VEVENT"))
-        self.assertEqual(len(evs), 2)
+        self.assertEqual(len(evs), 3)
         self.assertEqual(str(evs[0]["SUMMARY"]), "🍿 " + MOVIES[101]["title"])
         self.assertIn("A crew races to stop a dying star.\nSecond line.", str(evs[0]["DESCRIPTION"]))
         self.assertEqual(evs[0]["DTSTART"].dt, dt.date(2026, 11, 6))
@@ -144,7 +160,38 @@ class BuildTests(unittest.TestCase):
         cfg = copy.deepcopy(CFG)
         cfg["events"]["alert"] = "PT9H"
         _, ics, _ = self.build(cfg)
-        self.assertEqual(ics.count("TRIGGER:PT9H"), 2)
+        self.assertEqual(ics.count("TRIGGER:PT9H"), 3)
+
+    def test_event_screening_dropped(self):
+        _, _, ev = self.build()
+        self.assertNotIn("tmdb-105@movie-calendar", ev)
+        self.assertIn("Anime Night Live | 30.0 | event/limited screening", self.report)
+
+    def test_early_access_uses_wide_date(self):
+        _, _, ev = self.build()
+        self.assertEqual(ev["tmdb-106@movie-calendar"]["date"], dt.date(2026, 12, 18))
+
+    def test_exclude_rereleases(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["releases"]["exclude_rereleases"] = True
+        _, _, ev = self.build(cfg)
+        self.assertNotIn("tmdb-102@movie-calendar", ev)
+        self.assertIn("The Fellowship | 40.0 | re-release", self.report)
+
+    def test_min_popularity_paging_and_report(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["releases"]["min_popularity"] = 15.0
+        api, _, ev = self.build(cfg)
+        self.assertEqual(sum(1 for path, _ in api.calls if path == "/discover/movie"), 1)
+        self.assertNotIn("/movie/103", [path for path, _ in api.calls])
+        self.assertIn("Just below min_popularity (15.0)", self.report)
+        self.assertIn("## 🍿 3 movies on the calendar", self.report)
+
+    def test_shipped_config_is_complete(self):
+        shipped = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
+        self.assertTrue(shipped["releases"]["exclude_rereleases"])
+        self.assertGreaterEqual(shipped["releases"]["min_popularity"], 15)
+        self.assertIn("fathom", shipped["releases"]["exclude_note_keywords"])
 
     def test_runtime_format(self):
         self.assertEqual(bc.format_runtime(45), "45m")

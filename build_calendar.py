@@ -66,10 +66,15 @@ class TMDB:
         raise RuntimeError(f"TMDB request kept failing: {path}")
 
 
-def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date) -> list[int]:
-    """Movie IDs with a regional theatrical release in [start, end], most popular first."""
+def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date) -> tuple[dict[int, float], list[dict]]:
+    """Movies with a regional theatrical release in [start, end], most popular first.
+
+    Returns ({id: popularity} for movies above min_popularity, [the first few
+    movies just below it] for the build report).
+    """
     rel = cfg["releases"]
-    ids: list[int] = []
+    ids: dict[int, float] = {}
+    below: list[dict] = []
     page, total = 1, 1
     while page <= min(total, rel["max_pages"]):
         data = api.get(
@@ -85,13 +90,16 @@ def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date) -> list[int
         total = data.get("total_pages", 1)
         results = data.get("results", [])
         for m in results:
-            if (m.get("popularity") or 0) >= rel["min_popularity"]:
-                ids.append(m["id"])
+            pop = m.get("popularity") or 0
+            if pop >= rel["min_popularity"]:
+                ids.setdefault(m["id"], pop)
+            elif len(below) < 15 and m["id"] not in ids:
+                below.append({"title": m.get("title", "?"), "popularity": pop})
         # Sorted by popularity: once a page dips below the floor, later pages will too.
         if not results or (results[-1].get("popularity") or 0) < rel["min_popularity"]:
             break
         page += 1
-    return list(dict.fromkeys(ids))
+    return ids, below
 
 
 def movie_details(api: TMDB, movie_id: int) -> dict:
@@ -112,12 +120,15 @@ def _parse_date(s: str) -> dt.date | None:
         return None
 
 
-def pick_release(movie: dict, region: str, types: list[int], start: dt.date, end: dt.date) -> dict | None:
+def pick_release(movie: dict, rel: dict, start: dt.date, end: dt.date) -> tuple[dict | None, str]:
     """Choose the release-calendar entry for this movie.
 
-    Returns {"date", "type", "certification", "rerelease"} or None if no
-    matching regional release falls in the window.
+    Returns ({"date", "type", "certification", "rerelease"}, "") when the movie
+    belongs on the calendar, or (None, reason) when it's filtered out.
     """
+    region, types = rel["region"], rel["release_types"]
+    keywords = [k.lower() for k in rel.get("exclude_note_keywords", [])]
+
     entries = []
     for country in movie.get("release_dates", {}).get("results", []):
         if country.get("iso_3166_1") != region:
@@ -130,18 +141,31 @@ def pick_release(movie: dict, region: str, types: list[int], start: dt.date, end
 
     in_window = [r for r in entries if r.get("type") in types and start <= r["_date"] <= end]
     if not in_window:
-        return None
-    chosen = in_window[0]
+        return None, f"no {region} theatrical date in window"
+
+    # Drop individual release entries whose note marks them as events or limited runs
+    # (e.g. "Fathom Events", "One night only"). A movie with a separate plain wide-release
+    # entry still makes it.
+    def flagged(r: dict) -> str:
+        note = (r.get("note") or "").lower()
+        return next((k for k in keywords if k in note), "")
+
+    clean = [r for r in in_window if not flagged(r)]
+    if not clean:
+        return None, f'event/limited screening (note: "{in_window[0].get("note", "")}")'
+    chosen = clean[0]
 
     # Earlier theatrical run in this region, or an original release years before → re-release.
     earlier = any(r.get("type") in THEATRICAL_TYPES and r["_date"] < chosen["_date"] - dt.timedelta(days=365) for r in entries)
     original = _parse_date(movie.get("release_date", ""))
     old_film = original is not None and (chosen["_date"] - original).days > 2 * 365
     note = (chosen.get("note") or "").lower()
-    rerelease = earlier or old_film or "re-release" in note or "rerelease" in note or "anniversary" in note
+    rerelease = earlier or old_film or any(k in note for k in ("re-release", "rerelease", "anniversary"))
+    if rerelease and rel.get("exclude_rereleases"):
+        return None, "re-release"
 
     cert = chosen.get("certification") or next((r.get("certification") for r in entries if r.get("certification")), "")
-    return {"date": chosen["_date"], "type": chosen.get("type"), "certification": cert, "rerelease": rerelease}
+    return {"date": chosen["_date"], "type": chosen.get("type"), "certification": cert, "rerelease": rerelease}, ""
 
 
 def trailer_url(movie: dict) -> str | None:
@@ -265,27 +289,56 @@ def render_ics(events: list[dict], cfg: dict, now: dt.datetime) -> str:
 # ------------------------------------------------------------------------- main
 
 
-def build(api: TMDB, cfg: dict, today: dt.date, now: dt.datetime) -> tuple[str, list[dict]]:
+def _md(text: str) -> str:
+    return text.replace("|", "\\|")
+
+
+def render_report(kept: list[dict], dropped: list[dict], below: list[dict], rel: dict, start: dt.date, end: dt.date) -> str:
+    """Markdown summary shown on the GitHub Actions run page, for tuning config.toml."""
+    out = [
+        f"## 🍿 {len(kept)} movies on the calendar",
+        f"{rel['region']} releases {start} → {end} · min_popularity {rel['min_popularity']} · "
+        f"exclude_rereleases {str(rel.get('exclude_rereleases', False)).lower()}",
+        "",
+        "| Date | Title | Popularity |",
+        "|---|---|---:|",
+    ]
+    out += [f"| {k['date']} | {_md(k['title'])} | {k['popularity']:.1f} |" for k in sorted(kept, key=lambda k: k["date"])]
+    if dropped:
+        out += ["", f"### Filtered out ({len(dropped)})", "", "| Title | Popularity | Reason |", "|---|---:|---|"]
+        out += [f"| {_md(d['title'])} | {d['popularity']:.1f} | {_md(d['reason'])} |" for d in sorted(dropped, key=lambda d: -d["popularity"])]
+    if below:
+        out += ["", f"### Just below min_popularity ({rel['min_popularity']})", "",
+                ", ".join(f"{b['title']} ({b['popularity']:.1f})" for b in below)]
+    return "\n".join(out) + "\n"
+
+
+def build(api: TMDB, cfg: dict, today: dt.date, now: dt.datetime) -> tuple[str, list[dict], str]:
     rel = cfg["releases"]
     start = today - dt.timedelta(days=rel["days_back"])
     end = today + dt.timedelta(days=rel["days_ahead"])
-    ids = discover_ids(api, cfg, start, end)
+    ids, below = discover_ids(api, cfg, start, end)
     print(f"Discovered {len(ids)} movies with {rel['region']} releases {start} → {end}", file=sys.stderr)
 
-    events = []
-    for i, movie_id in enumerate(ids, 1):
+    events, kept, dropped = [], [], []
+    for i, (movie_id, popularity) in enumerate(ids.items(), 1):
         try:
             movie = movie_details(api, movie_id)
         except Exception as exc:  # one bad title shouldn't sink the feed
             print(f"  skip {movie_id}: {exc}", file=sys.stderr)
             continue
-        release = pick_release(movie, rel["region"], rel["release_types"], start, end)
+        title = movie.get("title") or str(movie_id)
+        release, reason = pick_release(movie, rel, start, end)
         if release:
             events.append(build_event(movie, release, cfg))
+            kept.append({"title": title, "date": release["date"], "popularity": popularity})
+        else:
+            dropped.append({"title": title, "popularity": popularity, "reason": reason})
         if i % 40 == 0:
             time.sleep(1)  # stay well under TMDB's rate limit
-    print(f"Wrote {len(events)} events", file=sys.stderr)
-    return render_ics(events, cfg, now), events
+    print(f"Wrote {len(events)} events, filtered out {len(dropped)}", file=sys.stderr)
+    report = render_report(kept, dropped, below, rel, start, end)
+    return render_ics(events, cfg, now), events, report
 
 
 def main() -> None:
@@ -297,7 +350,10 @@ def main() -> None:
     cfg = tomllib.loads(args.config.read_text(encoding="utf-8"))
     api = TMDB(os.environ.get("TMDB_TOKEN"), os.environ.get("TMDB_API_KEY"))
     now = dt.datetime.now(dt.timezone.utc)
-    ics, events = build(api, cfg, now.date(), now)
+    ics, events, report = build(api, cfg, now.date(), now)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(report)
     if not events:
         sys.exit("No events found — refusing to publish an empty calendar.")
     args.out.parent.mkdir(parents=True, exist_ok=True)
