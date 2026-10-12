@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🍿 Movie Releases</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fbf8f3; --fg:#1d1b18; --muted:#6b645a; --accent:#c8331f; --card:#fff; --line:#e7e0d5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161412; --fg:#f2ede6; --muted:#a69e92; --accent:#ff6b52; --card:#1f1c19; --line:#332e29; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width:560px; margin:0 auto; padding:56px 16px; }
+  h1 { font-size:2rem; margin:0 0 8px; }
+  p { color:var(--muted); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  a.btn { display:block; text-align:center; background:var(--accent); color:#fff; text-decoration:none; font-weight:600; padding:14px; border-radius:10px; }
+  code { display:block; margin-top:14px; padding:10px; border-radius:8px; background:var(--bg); border:1px solid var(--line); font-size:.85rem; word-break:break-all; }
+  small { display:block; margin-top:32px; color:var(--muted); font-size:.8rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🍿 Movie Releases</h1>
+  <p>US theatrical release dates with runtime, rating, cast, synopsis and trailer links. Updated daily.</p>
+  <div class="card">
+    <a class="btn" id="subscribe" href="movies.ics">Subscribe in Calendar</a>
+    <code id="url">movies.ics</code>
+  </div>
+  <small>Data from <a href="https://www.themoviedb.org/">TMDB</a>. This product uses the TMDB API but is not endorsed or certified by TMDB.</small>
+</main>
+<script>
+  const ics = new URL("movies.ics", location.href);
+  document.getElementById("url").textContent = ics.href;
+  document.getElementById("subscribe").href = "webcal://" + ics.host + ics.pathname;
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+__pycache__/
+public/
+*.pyc
+sample-movies.ics

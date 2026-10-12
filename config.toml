@@ -1,0 +1,28 @@
+# Movie release calendar settings.
+# Edit these and push — the next build picks them up.
+
+[calendar]
+name = "🍿 Movie Releases"
+description = "US theatrical releases with details from TMDB."
+event_prefix = "🍿 "
+# How often subscribed apps should re-check the feed (ISO 8601 duration).
+refresh_interval = "PT12H"
+
+[releases]
+region = "US"
+# TMDB release types: 1 Premiere, 2 Theatrical (limited), 3 Theatrical, 4 Digital, 5 Physical, 6 TV
+# 3 = wide theatrical only. Use [2, 3] to also include limited releases.
+release_types = [3]
+days_back = 60       # keep recent releases on the calendar this long
+days_ahead = 365     # look this far into the future
+# Skip obscure titles. TMDB popularity is relative; ~5 trims most tiny releases,
+# 0 includes everything TMDB knows about.
+min_popularity = 5.0
+# Hard cap on how many discover pages to read (20 movies per page).
+max_pages = 25
+
+[events]
+# Optional alert, relative to midnight at the start of release day (ISO 8601 duration).
+# "" = no alert, "PT9H" = 9 AM on release day, "-PT15H" = 9 AM the day before.
+alert = ""
+top_cast = 4
