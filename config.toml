@@ -31,6 +31,25 @@ exclude_note_keywords = [
 # Hard cap on how many discover pages to read (20 movies per page).
 max_pages = 25
 
+[streaming]
+# Streaming-original movies: a US digital premiere for a film that never had a US wide
+# theatrical release (theater movies arriving on rental/streaming are left out).
+enabled = true
+# Only include titles identified as being on one of the services below.
+require_major_service = true
+
+# Label shown in the event title → words to look for in TMDB's US streaming providers
+# or the release note (case-insensitive, whole words). Delete a line to drop a service.
+[streaming.services]
+"Netflix" = ["netflix"]
+"Prime Video" = ["prime video", "amazon prime"]
+"Apple TV" = ["apple tv"]
+"Disney+" = ["disney plus", "disney"]
+"HBO Max" = ["hbo max", "max"]
+"Hulu" = ["hulu"]
+"Paramount+" = ["paramount plus", "paramount"]
+"Peacock" = ["peacock"]
+
 [events]
 # Optional alert, relative to midnight at the start of release day (ISO 8601 duration).
 # "" = no alert, "PT9H" = 9 AM on release day, "-PT15H" = 9 AM the day before.

@@ -14,6 +14,7 @@ CFG = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
 CFG["releases"].update(release_types=[3], days_back=60, days_ahead=365, min_popularity=5.0,
                        exclude_rereleases=False, exclude_note_keywords=["fathom", "early access", "event"])
 CFG["events"]["alert"] = ""
+CFG["streaming"]["enabled"] = False  # streaming tests switch it on
 TODAY = dt.date(2026, 10, 12)
 NOW = dt.datetime(2026, 10, 12, 15, 0, tzinfo=dt.timezone.utc)
 
@@ -61,6 +62,30 @@ MOVIES = {
             rd("2026-12-15", 3, "PG-13", "IMAX Early Access"), rd("2026-12-18", 3, "PG-13")]}]},
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
     },
+    201: {  # Netflix original, identified by the release note
+        "id": 201, "title": "Heist Club", "release_date": "2026-11-20", "runtime": 115, "overview": "A crew of retirees plans one last job.",
+        "genres": [{"name": "Comedy"}], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [
+            rd("2026-11-13", 2, "", "Los Angeles qualifying run"), rd("2026-11-20", 4, "PG-13", "Netflix")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {}, "watch/providers": {"results": {}},
+    },
+    202: {  # theater movie arriving on digital rental — not a streaming original
+        "id": 202, "title": "Summer Smash", "release_date": "2026-07-24", "runtime": 120, "overview": "",
+        "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-07-24", 3, "PG-13"), rd("2026-10-20", 4, "PG-13")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {}, "watch/providers": {"results": {}},
+    },
+    203: {  # digital premiere on a non-major service
+        "id": 203, "title": "Free Stream Flick", "release_date": "2026-12-01", "runtime": 90, "overview": "",
+        "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-12-01", 4)]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
+        "watch/providers": {"results": {"US": {"flatrate": [{"provider_name": "Tubi TV"}]}}},
+    },
+    204: {  # identified via watch providers; also "Cinemax" must not match "max"
+        "id": 204, "title": "Orbit", "release_date": "2026-10-30", "runtime": 101, "overview": "",
+        "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-10-30", 4, "R")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
+        "watch/providers": {"results": {"US": {"flatrate": [{"provider_name": "Cinemax"}, {"provider_name": "Apple TV+"}],
+                                               "rent": [{"provider_name": "Amazon Video"}]}}},
+    },
     104: {  # US theatrical outside the window
         "id": 104, "title": "Way Later", "release_date": "2028-05-01", "runtime": None, "overview": "",
         "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2028-05-01", 3)]}]},
@@ -75,6 +100,11 @@ class FakeAPI:
 
     def get(self, path, **params):
         self.calls.append((path, params))
+        if path == "/discover/movie" and params["with_release_type"] == "4":
+            return {"total_pages": 1, "results": [
+                {"id": 201, "popularity": 50.0}, {"id": 202, "popularity": 45.0}, {"id": 101, "popularity": 40.0},
+                {"id": 203, "popularity": 20.0}, {"id": 204, "popularity": 18.0}, {"id": 208, "title": "Low Stream", "popularity": 2.0},
+            ]}
         if path == "/discover/movie":
             if params["page"] == 1:
                 return {"total_pages": 3, "results": [
@@ -187,11 +217,53 @@ class BuildTests(unittest.TestCase):
         self.assertIn("Just below min_popularity (15.0)", self.report)
         self.assertIn("## 🍿 3 movies on the calendar", self.report)
 
+    def streaming_build(self, **overrides):
+        cfg = copy.deepcopy(CFG)
+        cfg["streaming"]["enabled"] = True
+        cfg["streaming"].update(overrides)
+        return self.build(cfg)
+
+    def test_streaming_original_from_note(self):
+        _, ics, ev = self.streaming_build()
+        e = ev["tmdb-201@movie-calendar"]
+        self.assertEqual(e["summary"], "🍿 Heist Club (Netflix)")
+        self.assertEqual(e["date"], dt.date(2026, 11, 20))  # streaming date, not the qualifying run
+        self.assertTrue(e["description"].startswith("Streaming premiere on Netflix\nPG-13 · 1h 55m · Comedy"))
+
+    def test_streaming_from_watch_providers(self):
+        _, _, ev = self.streaming_build()
+        self.assertEqual(ev["tmdb-204@movie-calendar"]["summary"], "🍿 Orbit (Apple TV)")
+
+    def test_theater_movie_on_digital_is_not_streaming(self):
+        _, _, ev = self.streaming_build()
+        self.assertNotIn("tmdb-202@movie-calendar", ev)
+        self.assertIn("Summer Smash | 45.0 | no US theatrical date in window |", self.report)
+        self.assertTrue(ev["tmdb-101@movie-calendar"]["summary"].startswith("🍿 Starfall:"))  # still a theatrical event
+        self.assertNotIn("(", ev["tmdb-101@movie-calendar"]["summary"])  # no streaming label
+
+    def test_non_major_service(self):
+        _, _, ev = self.streaming_build()
+        self.assertNotIn("tmdb-203@movie-calendar", ev)
+        self.assertIn("not on a major service", self.report)
+        _, _, ev = self.streaming_build(require_major_service=False)
+        self.assertEqual(ev["tmdb-203@movie-calendar"]["summary"], "🍿 Free Stream Flick (Streaming)")
+
+    def test_streaming_report_and_disabled(self):
+        self.streaming_build()
+        self.assertIn("| 2026-11-20 | Heist Club | Netflix | 50.0 |", self.report)
+        self.assertIn("| 2026-11-06 | Starfall", self.report)
+        self.assertIn("Low Stream (2.0)", self.report)
+        api, _, ev = self.build()
+        self.assertFalse(any(p.get("with_release_type") == "4" for _, p in api.calls))
+        self.assertNotIn("tmdb-201@movie-calendar", ev)
+
     def test_shipped_config_is_complete(self):
         shipped = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
         self.assertTrue(shipped["releases"]["exclude_rereleases"])
         self.assertGreaterEqual(shipped["releases"]["min_popularity"], 15)
         self.assertIn("fathom", shipped["releases"]["exclude_note_keywords"])
+        self.assertTrue(shipped["streaming"]["enabled"])
+        self.assertIn("Netflix", shipped["streaming"]["services"])
 
     def test_runtime_format(self):
         self.assertEqual(bc.format_runtime(45), "45m")

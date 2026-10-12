@@ -1,6 +1,6 @@
 # 🍿 Movie Release Calendar
 
-A subscribable calendar of US theatrical movie releases, built daily from [TMDB](https://www.themoviedb.org/).
+A subscribable calendar of US theatrical movie releases and major streaming-original premieres, built daily from [TMDB](https://www.themoviedb.org/).
 
 Each release is an all-day event titled `🍿 Movie Title`, with the rating, runtime, genres, director, top cast, synopsis, and links to the trailer, TMDB, IMDb, and the poster. Events show as **Free**, so they won't block your availability.
 
@@ -31,6 +31,8 @@ Edit `config.toml` and push. The next build uses your changes.
 | `exclude_rereleases` | `true` leaves out re-releases and anniversary runs |
 | `exclude_note_keywords` | Skips release entries whose TMDB note mentions things like "Fathom" or "early access" |
 | `days_back` / `days_ahead` | How far back and ahead the calendar covers |
+| `[streaming] enabled` | Adds streaming-original premieres, such as `🍿 Title (Netflix)`. Theater movies coming to rental or streaming are left out. |
+| `require_major_service` / `[streaming.services]` | Limits streaming titles to the services you list |
 | `alert` | `""` = no alert. `"PT9H"` = 9 AM on release day. `"-PT15H"` = 9 AM the day before. |
 
 When re-releases are included, they're tagged "(Re-release)".

@@ -16,6 +16,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 import tomllib
@@ -31,6 +32,7 @@ YOUTUBE_URL = "https://www.youtube.com/watch?v={key}"
 POSTER_URL = "https://image.tmdb.org/t/p/w500{path}"
 RELEASE_TYPE_LIMITED = 2
 RELEASE_TYPE_THEATRICAL = 3
+RELEASE_TYPE_DIGITAL = 4
 THEATRICAL_TYPES = {RELEASE_TYPE_LIMITED, RELEASE_TYPE_THEATRICAL}
 
 
@@ -66,8 +68,8 @@ class TMDB:
         raise RuntimeError(f"TMDB request kept failing: {path}")
 
 
-def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date) -> tuple[dict[int, float], list[dict]]:
-    """Movies with a regional theatrical release in [start, end], most popular first.
+def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date, types: list[int]) -> tuple[dict[int, float], list[dict]]:
+    """Movies with a regional release of the given types in [start, end], most popular first.
 
     Returns ({id: popularity} for movies above min_popularity, [the first few
     movies just below it] for the build report).
@@ -80,7 +82,7 @@ def discover_ids(api: TMDB, cfg: dict, start: dt.date, end: dt.date) -> tuple[di
         data = api.get(
             "/discover/movie",
             region=rel["region"],
-            with_release_type="|".join(str(t) for t in rel["release_types"]),
+            with_release_type="|".join(str(t) for t in types),
             **{"release_date.gte": start.isoformat(), "release_date.lte": end.isoformat()},
             sort_by="popularity.desc",
             include_adult="false",
@@ -106,7 +108,7 @@ def movie_details(api: TMDB, movie_id: int) -> dict:
     return api.get(
         f"/movie/{movie_id}",
         language="en-US",
-        append_to_response="release_dates,credits,videos,external_ids",
+        append_to_response="release_dates,credits,videos,external_ids,watch/providers",
     )
 
 
@@ -120,15 +122,8 @@ def _parse_date(s: str) -> dt.date | None:
         return None
 
 
-def pick_release(movie: dict, rel: dict, start: dt.date, end: dt.date) -> tuple[dict | None, str]:
-    """Choose the release-calendar entry for this movie.
-
-    Returns ({"date", "type", "certification", "rerelease"}, "") when the movie
-    belongs on the calendar, or (None, reason) when it's filtered out.
-    """
-    region, types = rel["region"], rel["release_types"]
-    keywords = [k.lower() for k in rel.get("exclude_note_keywords", [])]
-
+def region_entries(movie: dict, region: str) -> list[dict]:
+    """This region's release-date entries, oldest first, each with a parsed "_date"."""
     entries = []
     for country in movie.get("release_dates", {}).get("results", []):
         if country.get("iso_3166_1") != region:
@@ -138,7 +133,37 @@ def pick_release(movie: dict, rel: dict, start: dt.date, end: dt.date) -> tuple[
             if d:
                 entries.append({**r, "_date": d})
     entries.sort(key=lambda r: r["_date"])
+    return entries
 
+
+def _note_flag(r: dict, keywords: list[str]) -> str:
+    note = (r.get("note") or "").lower()
+    return next((k for k in keywords if k.lower() in note), "")
+
+
+def _is_rerelease(movie: dict, entries: list[dict], chosen: dict) -> bool:
+    """Earlier theatrical run in this region, an original release years before, or a note saying so."""
+    earlier = any(r.get("type") in THEATRICAL_TYPES and r["_date"] < chosen["_date"] - dt.timedelta(days=365) for r in entries)
+    original = _parse_date(movie.get("release_date", ""))
+    old_film = original is not None and (chosen["_date"] - original).days > 2 * 365
+    note = (chosen.get("note") or "").lower()
+    return earlier or old_film or any(k in note for k in ("re-release", "rerelease", "anniversary"))
+
+
+def _certification(chosen: dict, entries: list[dict]) -> str:
+    return chosen.get("certification") or next((r.get("certification") for r in entries if r.get("certification")), "")
+
+
+def pick_release(movie: dict, rel: dict, start: dt.date, end: dt.date) -> tuple[dict | None, str]:
+    """Choose the release-calendar entry for this movie.
+
+    Returns ({"date", "type", "certification", "rerelease"}, "") when the movie
+    belongs on the calendar, or (None, reason) when it's filtered out.
+    """
+    region, types = rel["region"], rel["release_types"]
+    keywords = [k.lower() for k in rel.get("exclude_note_keywords", [])]
+
+    entries = region_entries(movie, region)
     in_window = [r for r in entries if r.get("type") in types and start <= r["_date"] <= end]
     if not in_window:
         return None, f"no {region} theatrical date in window"
@@ -146,26 +171,51 @@ def pick_release(movie: dict, rel: dict, start: dt.date, end: dt.date) -> tuple[
     # Drop individual release entries whose note marks them as events or limited runs
     # (e.g. "Fathom Events", "One night only"). A movie with a separate plain wide-release
     # entry still makes it.
-    def flagged(r: dict) -> str:
-        note = (r.get("note") or "").lower()
-        return next((k for k in keywords if k in note), "")
-
-    clean = [r for r in in_window if not flagged(r)]
+    clean = [r for r in in_window if not _note_flag(r, keywords)]
     if not clean:
         return None, f'event/limited screening (note: "{in_window[0].get("note", "")}")'
     chosen = clean[0]
 
-    # Earlier theatrical run in this region, or an original release years before → re-release.
-    earlier = any(r.get("type") in THEATRICAL_TYPES and r["_date"] < chosen["_date"] - dt.timedelta(days=365) for r in entries)
-    original = _parse_date(movie.get("release_date", ""))
-    old_film = original is not None and (chosen["_date"] - original).days > 2 * 365
-    note = (chosen.get("note") or "").lower()
-    rerelease = earlier or old_film or any(k in note for k in ("re-release", "rerelease", "anniversary"))
+    rerelease = _is_rerelease(movie, entries, chosen)
     if rerelease and rel.get("exclude_rereleases"):
         return None, "re-release"
 
-    cert = chosen.get("certification") or next((r.get("certification") for r in entries if r.get("certification")), "")
-    return {"date": chosen["_date"], "type": chosen.get("type"), "certification": cert, "rerelease": rerelease}, ""
+    return {"date": chosen["_date"], "type": chosen.get("type"), "certification": _certification(chosen, entries),
+            "rerelease": rerelease, "service": None}, ""
+
+
+def streaming_service(movie: dict, entry: dict, region: str, services: dict[str, list[str]]) -> str | None:
+    """Name the major streaming service from the release note or TMDB's (JustWatch) providers."""
+    providers = movie.get("watch/providers", {}).get("results", {}).get(region, {})
+    names = [entry.get("note") or ""] + [p.get("provider_name", "") for p in providers.get("flatrate", [])]
+    for display, keywords in services.items():
+        for kw in keywords:
+            pattern = re.compile(rf"\b{re.escape(kw.lower())}\b")
+            if any(pattern.search(n.lower()) for n in names):
+                return display
+    return None
+
+
+def pick_streaming(movie: dict, cfg: dict, start: dt.date, end: dt.date) -> tuple[dict | None, str]:
+    """A streaming-original premiere: a regional digital release in the window for a movie
+    that never had a regional wide theatrical release (so digital rentals of theater movies
+    stay off the calendar)."""
+    rel, st = cfg["releases"], cfg["streaming"]
+    entries = region_entries(movie, rel["region"])
+    keywords = rel.get("exclude_note_keywords", [])
+    if any(r.get("type") == RELEASE_TYPE_THEATRICAL and not _note_flag(r, keywords) for r in entries):
+        return None, "streaming: had a wide theatrical release"
+    digital = [r for r in entries if r.get("type") == RELEASE_TYPE_DIGITAL and start <= r["_date"] <= end]
+    if not digital:
+        return None, "streaming: no digital premiere in window"
+    chosen = digital[0]
+    if rel.get("exclude_rereleases") and _is_rerelease(movie, entries, chosen):
+        return None, "streaming: older film"
+    service = streaming_service(movie, chosen, rel["region"], st["services"])
+    if service is None and st.get("require_major_service", True):
+        return None, "streaming: not on a major service"
+    return {"date": chosen["_date"], "type": RELEASE_TYPE_DIGITAL, "certification": _certification(chosen, entries),
+            "rerelease": False, "service": service or "Streaming"}, ""
 
 
 def trailer_url(movie: dict) -> str | None:
@@ -185,6 +235,8 @@ def build_event(movie: dict, release: dict, cfg: dict) -> dict:
     ev = cfg["events"]
     title = movie.get("title") or movie.get("original_title") or "Untitled"
     tags = []
+    if release.get("service"):
+        tags.append(release["service"])
     if release["rerelease"]:
         tags.append("Re-release")
     if release["type"] == RELEASE_TYPE_LIMITED:
@@ -198,6 +250,8 @@ def build_event(movie: dict, release: dict, cfg: dict) -> dict:
 
     facts = " · ".join(x for x in [release["certification"], format_runtime(movie.get("runtime")), ", ".join(genres)] if x)
     lines = []
+    if release.get("service"):
+        lines.append(f"Streaming premiere on {release['service']}" if release["service"] != "Streaming" else "Streaming premiere")
     if facts:
         lines.append(facts)
     if directors:
@@ -300,10 +354,10 @@ def render_report(kept: list[dict], dropped: list[dict], below: list[dict], rel:
         f"{rel['region']} releases {start} → {end} · min_popularity {rel['min_popularity']} · "
         f"exclude_rereleases {str(rel.get('exclude_rereleases', False)).lower()}",
         "",
-        "| Date | Title | Popularity |",
-        "|---|---|---:|",
+        "| Date | Title | Where | Popularity |",
+        "|---|---|---|---:|",
     ]
-    out += [f"| {k['date']} | {_md(k['title'])} | {k['popularity']:.1f} |" for k in sorted(kept, key=lambda k: k["date"])]
+    out += [f"| {k['date']} | {_md(k['title'])} | {k['service']} | {k['popularity']:.1f} |" for k in sorted(kept, key=lambda k: k["date"])]
     if dropped:
         out += ["", f"### Filtered out ({len(dropped)})", "", "| Title | Popularity | Reason |", "|---|---:|---|"]
         out += [f"| {_md(d['title'])} | {d['popularity']:.1f} | {_md(d['reason'])} |" for d in sorted(dropped, key=lambda d: -d["popularity"])]
@@ -317,7 +371,14 @@ def build(api: TMDB, cfg: dict, today: dt.date, now: dt.datetime) -> tuple[str, 
     rel = cfg["releases"]
     start = today - dt.timedelta(days=rel["days_back"])
     end = today + dt.timedelta(days=rel["days_ahead"])
-    ids, below = discover_ids(api, cfg, start, end)
+    ids, below = discover_ids(api, cfg, start, end, rel["release_types"])
+    streaming_on = cfg.get("streaming", {}).get("enabled", False)
+    if streaming_on:
+        s_ids, s_below = discover_ids(api, cfg, start, end, [RELEASE_TYPE_DIGITAL])
+        for k, v in s_ids.items():
+            ids.setdefault(k, v)
+        seen = {b["title"] for b in below}
+        below = sorted(below + [b for b in s_below if b["title"] not in seen], key=lambda b: -b["popularity"])[:15]
     print(f"Discovered {len(ids)} movies with {rel['region']} releases {start} → {end}", file=sys.stderr)
 
     events, kept, dropped = [], [], []
@@ -329,9 +390,12 @@ def build(api: TMDB, cfg: dict, today: dt.date, now: dt.datetime) -> tuple[str, 
             continue
         title = movie.get("title") or str(movie_id)
         release, reason = pick_release(movie, rel, start, end)
+        if not release and streaming_on:
+            release, s_reason = pick_streaming(movie, cfg, start, end)
+            reason = reason if s_reason.endswith("had a wide theatrical release") else f"{reason}; {s_reason}"
         if release:
             events.append(build_event(movie, release, cfg))
-            kept.append({"title": title, "date": release["date"], "popularity": popularity})
+            kept.append({"title": title, "date": release["date"], "popularity": popularity, "service": release.get("service") or "Theaters"})
         else:
             dropped.append({"title": title, "popularity": popularity, "reason": reason})
         if i % 40 == 0:
