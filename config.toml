@@ -37,6 +37,11 @@ max_pages = 25
 enabled = true
 # Only include titles identified as being on one of the services below.
 require_major_service = true
+# Skip shorts, specials and extras. Titles with no runtime listed yet are kept.
+min_runtime = 60
+# Original languages to allow for streaming titles (ISO 639-1 codes, e.g. "es", "ja").
+# Empty list = any language. Theater releases are never filtered by language.
+languages = ["en"]
 
 # Label shown in the event title → words to look for in TMDB's US streaming providers
 # or the release note (case-insensitive, whole words). Delete a line to drop a service.

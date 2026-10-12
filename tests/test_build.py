@@ -47,7 +47,7 @@ MOVIES = {
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
     },
     103: {  # limited only
-        "id": 103, "title": "Small Indie", "release_date": "2026-10-23", "runtime": 92, "overview": "",
+        "id": 103, "title": "Small Indie", "release_date": "2026-10-23", "runtime": 92, "overview": "", "original_language": "ta",
         "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-10-23", 2, "R")]}]},
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
     },
@@ -63,28 +63,43 @@ MOVIES = {
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
     },
     201: {  # Netflix original, identified by the release note
-        "id": 201, "title": "Heist Club", "release_date": "2026-11-20", "runtime": 115, "overview": "A crew of retirees plans one last job.",
+        "id": 201, "original_language": "en", "title": "Heist Club", "release_date": "2026-11-20", "runtime": 115, "overview": "A crew of retirees plans one last job.",
         "genres": [{"name": "Comedy"}], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [
             rd("2026-11-13", 2, "", "Los Angeles qualifying run"), rd("2026-11-20", 4, "PG-13", "Netflix")]}]},
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {}, "watch/providers": {"results": {}},
     },
     202: {  # theater movie arriving on digital rental — not a streaming original
-        "id": 202, "title": "Summer Smash", "release_date": "2026-07-24", "runtime": 120, "overview": "",
+        "id": 202, "original_language": "en", "title": "Summer Smash", "release_date": "2026-07-24", "runtime": 120, "overview": "",
         "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-07-24", 3, "PG-13"), rd("2026-10-20", 4, "PG-13")]}]},
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {}, "watch/providers": {"results": {}},
     },
     203: {  # digital premiere on a non-major service
-        "id": 203, "title": "Free Stream Flick", "release_date": "2026-12-01", "runtime": 90, "overview": "",
+        "id": 203, "original_language": "en", "title": "Free Stream Flick", "release_date": "2026-12-01", "runtime": 90, "overview": "",
         "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-12-01", 4)]}]},
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
         "watch/providers": {"results": {"US": {"flatrate": [{"provider_name": "Tubi TV"}]}}},
     },
     204: {  # identified via watch providers; also "Cinemax" must not match "max"
-        "id": 204, "title": "Orbit", "release_date": "2026-10-30", "runtime": 101, "overview": "",
+        "id": 204, "original_language": "en", "title": "Orbit", "release_date": "2026-10-30", "runtime": 101, "overview": "",
         "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-10-30", 4, "R")]}]},
         "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {},
         "watch/providers": {"results": {"US": {"flatrate": [{"provider_name": "Cinemax"}, {"provider_name": "Apple TV+"}],
                                                "rent": [{"provider_name": "Amazon Video"}]}}},
+    },
+    205: {  # 25-minute Netflix special — too short
+        "id": 205, "title": "Heist Club: Behind the Scenes", "release_date": "2026-11-20", "runtime": 25, "overview": "",
+        "original_language": "en", "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-11-20", 4, "", "Netflix")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {}, "watch/providers": {"results": {}},
+    },
+    206: {  # Korean-language Netflix film — excluded from streaming
+        "id": 206, "title": "Seoul Run", "release_date": "2026-12-11", "runtime": 118, "overview": "",
+        "original_language": "ko", "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2026-12-11", 4, "", "Netflix")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {}, "watch/providers": {"results": {}},
+    },
+    207: {  # English Netflix film with no runtime yet — kept
+        "id": 207, "title": "Untitled Spy Movie", "release_date": "2027-03-05", "runtime": 0, "overview": "",
+        "original_language": "en", "genres": [], "release_dates": {"results": [{"iso_3166_1": "US", "release_dates": [rd("2027-03-05", 4, "", "Netflix")]}]},
+        "credits": {"cast": [], "crew": []}, "videos": {"results": []}, "external_ids": {}, "watch/providers": {"results": {}},
     },
     104: {  # US theatrical outside the window
         "id": 104, "title": "Way Later", "release_date": "2028-05-01", "runtime": None, "overview": "",
@@ -103,7 +118,8 @@ class FakeAPI:
         if path == "/discover/movie" and params["with_release_type"] == "4":
             return {"total_pages": 1, "results": [
                 {"id": 201, "popularity": 50.0}, {"id": 202, "popularity": 45.0}, {"id": 101, "popularity": 40.0},
-                {"id": 203, "popularity": 20.0}, {"id": 204, "popularity": 18.0}, {"id": 208, "title": "Low Stream", "popularity": 2.0},
+                {"id": 203, "popularity": 20.0}, {"id": 204, "popularity": 18.0}, {"id": 205, "popularity": 17.0},
+                {"id": 206, "popularity": 16.0}, {"id": 207, "popularity": 15.5}, {"id": 208, "title": "Low Stream", "popularity": 2.0},
             ]}
         if path == "/discover/movie":
             if params["page"] == 1:
@@ -257,6 +273,23 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(any(p.get("with_release_type") == "4" for _, p in api.calls))
         self.assertNotIn("tmdb-201@movie-calendar", ev)
 
+    def test_streaming_runtime_and_language(self):
+        _, _, ev = self.streaming_build()
+        self.assertNotIn("tmdb-205@movie-calendar", ev)
+        self.assertIn("streaming: runtime 25m", self.report)
+        self.assertNotIn("tmdb-206@movie-calendar", ev)
+        self.assertIn("streaming: language 'ko'", self.report)
+        self.assertIn("tmdb-207@movie-calendar", ev)  # runtime not known yet → kept
+        _, _, ev = self.streaming_build(languages=["en", "ko"])
+        self.assertIn("tmdb-206@movie-calendar", ev)
+
+    def test_language_filter_never_touches_theaters(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["streaming"].update(enabled=True, languages=["en"])
+        cfg["releases"]["release_types"] = [2, 3]
+        _, _, ev = self.build(cfg)
+        self.assertIn("tmdb-103@movie-calendar", ev)  # Tamil-language theatrical release kept
+
     def test_shipped_config_is_complete(self):
         shipped = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
         self.assertTrue(shipped["releases"]["exclude_rereleases"])
@@ -264,6 +297,8 @@ class BuildTests(unittest.TestCase):
         self.assertIn("fathom", shipped["releases"]["exclude_note_keywords"])
         self.assertTrue(shipped["streaming"]["enabled"])
         self.assertIn("Netflix", shipped["streaming"]["services"])
+        self.assertEqual(shipped["streaming"]["min_runtime"], 60)
+        self.assertEqual(shipped["streaming"]["languages"], ["en"])
 
     def test_runtime_format(self):
         self.assertEqual(bc.format_runtime(45), "45m")

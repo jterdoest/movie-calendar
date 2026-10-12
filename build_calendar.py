@@ -208,6 +208,13 @@ def pick_streaming(movie: dict, cfg: dict, start: dt.date, end: dt.date) -> tupl
     digital = [r for r in entries if r.get("type") == RELEASE_TYPE_DIGITAL and start <= r["_date"] <= end]
     if not digital:
         return None, "streaming: no digital premiere in window"
+    languages = [l.lower() for l in st.get("languages", [])]
+    lang = (movie.get("original_language") or "").lower()
+    if languages and lang not in languages:
+        return None, f"streaming: language '{lang or '?'}'"
+    runtime = movie.get("runtime") or 0
+    if runtime and runtime < st.get("min_runtime", 0):  # unknown (0) runtime is kept — often unset before release
+        return None, f"streaming: runtime {runtime}m"
     chosen = digital[0]
     if rel.get("exclude_rereleases") and _is_rerelease(movie, entries, chosen):
         return None, "streaming: older film"

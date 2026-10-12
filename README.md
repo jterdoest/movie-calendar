@@ -33,6 +33,7 @@ Edit `config.toml` and push. The next build uses your changes.
 | `days_back` / `days_ahead` | How far back and ahead the calendar covers |
 | `[streaming] enabled` | Adds streaming-original premieres, such as `🍿 Title (Netflix)`. Theater movies coming to rental or streaming are left out. |
 | `require_major_service` / `[streaming.services]` | Limits streaming titles to the services you list |
+| `min_runtime` / `languages` | Streaming only: skips anything under 60 minutes, and anything not originally in English. Theater releases are never filtered by language. |
 | `alert` | `""` = no alert. `"PT9H"` = 9 AM on release day. `"-PT15H"` = 9 AM the day before. |
 
 When re-releases are included, they're tagged "(Re-release)".
